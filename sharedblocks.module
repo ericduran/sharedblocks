@@ -1,0 +1,362 @@
+<?php
+
+/**
+ * Shared Blocks Module
+ * @author Angie Byron and Jeff Robbins
+ *
+ * @todo
+ *  - Check for blocks that are cached per page or per user and flag them as possibly incompatible
+ *  - Add help text on publish and subscribe pages
+ *  - Add delete option for block subscriptions
+ *  - Turn subscription add button into a local task
+ *  - Move sharedblocks configuration under "build" rather than "settings"
+ */
+
+/**
+ * Implementation of hook_menu().
+ */
+function sharedblocks_menu() {
+  $items = array();
+
+  $items['admin/settings/sharedblocks'] = array(
+    'title' => 'Shared Blocks',
+    'description' => 'Configuration of shared blocks.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sharedblocks_publish_form'),
+    'access arguments' => array('access administration pages'),
+  );
+  $items['admin/settings/sharedblocks/publish'] = array(
+    'title' => 'Published Blocks',
+    'page callback' => 'sharedblocks_publish_form',
+    'access arguments' => array('publish blocks'),
+    'type' => MENU_DEFAULT_LOCAL_TASK,
+  );
+  $items['admin/settings/sharedblocks/subscribe'] = array(
+    'title' => 'Subscribe Blocks',
+    'page callback' => 'sharedblocks_subscribe_page',
+    'access arguments' => array('subscribe to blocks'),
+    'type' => MENU_LOCAL_TASK,
+  );
+  $items['admin/settings/sharedblocks/subscribe/add'] = array(
+    'title' => 'Add a Block Subscription',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sharedblocks_subscribe_form'),
+    'access arguments' => array('subscribe to blocks'),
+    'type' => DEFAULT_LOCAL_TASK,
+  );
+  $items['admin/settings/sharedblocks/subscribe/edit/%'] = array(
+    'title' => 'Subscribe Blocks',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sharedblocks_subscribe_form', 5),
+    'access arguments' => array('subscribe to blocks'),
+    'type' => MENU_CALLBACK,
+  );
+  $items['sharedblocks/%/%'] = array(
+    'page callback' => 'sharedblocks_publish_block',
+    'page arguments' => array(1, 2),
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+
+/**
+ * Implementation of hook_perm().
+ */
+function sharedblocks_perm() {
+  return array('publish blocks', 'subscribe to blocks');
+}
+
+/**
+ * Implementation of hook_block().
+ */
+function sharedblocks_block($op = 'list', $delta = 0, $edit = array()) {
+  switch ($op) {
+    case 'list':
+      // Get all blocks and read out their labels.
+      $r = db_query('SELECT name, description FROM {sharedblocks} ORDER BY name');
+
+      while ($block = db_fetch_object($r)) {
+        $blocks[$block->name] = array(
+          'info' => t('@description (subscription)', array('@description' => $block->description)),
+        );
+      }
+      return $blocks;
+      break;
+    case 'view':
+      return sharedblocks_block_view($delta);
+  }
+}
+
+/**
+ * Implementation of hook_cron().
+ */
+function sharedblocks_cron() {
+  // Check to see if any shared blocks have expired
+  $r = db_query('SELECT id, description, url, block_data, update_interval FROM {sharedblocks} WHERE expiration < %d', time());
+  while ($row = db_fetch_array($r)) {
+    // If so, grab a new copy of the block data from the url.
+    $block_data = sharedblocks_fetch_block($row['url']);
+    if ($block_data) {
+      $record['block_data'] = serialize($block_data);
+      watchdog('sharedblocks', t('Block @description was successfully fetched.', array('@description' => $row['description'])));
+    }
+    // If something went wrong, log an error, don't update the block content.
+    else {
+      watchdog('sharedblocks', t('Could not retrieve block from @url', array('@url' => $row['url'])), WATCHDOG_WARNING);
+    }
+
+    // Save record to the database.
+    $record['id'] = $row['id'];
+    $record['expiration'] = time() + $row['update_interval'];
+
+    drupal_write_record('sharedblocks', $record, 'id');
+    
+  }
+}
+
+
+
+/**
+ *  CALLBACKS 
+ */
+
+/**
+ * Callback for admin/settings/sharedblocks/publish
+ */
+function sharedblocks_publish_form() {
+  $published_blocks = variable_get('sharedblocks_publish', array());
+  $form = array();
+  
+  $form['sharedblocks_publish'] = array(
+    '#tree' => TRUE,
+    '#title' => t('Published Blocks'),
+  );
+
+  // Get a list of all the available blocks in the system.
+  foreach (module_implements('block') as $module) {
+    $mod_blocks = module_invoke($module, 'block', 'list');
+    if (is_array($mod_blocks)) {
+      // Loop through the list.
+      foreach ($mod_blocks as $delta => $info) {
+        // Make checkboxes for each one.
+        $form['sharedblocks_publish'][$module][$delta] = array(
+          '#type' => 'checkbox',
+          '#title' => check_plain($info['info']),
+          '#default_value' => $published_blocks[$module][$delta] ? TRUE : FALSE,
+          '#description' => $published_blocks[$module][$delta] ? url("sharedblocks/$module/$delta", array('absolute' => TRUE)) : '',
+        );
+      }
+    }
+  }
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+
+  return $form;
+}
+
+/**
+ * Submission handler for the publish config form.
+ */
+function sharedblocks_publish_form_submit($form, &$form_state) {
+  $values = $form_state['values'];
+  variable_set('sharedblocks_publish', $values['sharedblocks_publish']);
+  drupal_set_message(t('Published blocks have been saved.'));
+}
+
+/**
+ * Callback for admin/settings/sharedblocks/subscribe
+ */
+function sharedblocks_subscribe_page() {
+  $output = '';
+  $rows = array();
+
+  // Grab list of all shared blocks we've subscribed to.
+  $result = db_query('SELECT * FROM {sharedblocks} ORDER BY name');
+  while ($r = db_fetch_object($result)) {
+    $rows[] = array(check_plain($r->name), check_plain($r->description), l(t('edit'), "admin/settings/sharedblocks/subscribe/edit/". $r->id));
+    $rows[] = $row;
+  }
+
+  // Output list in a table.
+  $output .= '<p>' . l(t('Add new subscribed block'), 'admin/settings/sharedblocks/subscribe/add') . '</p>';
+  if (count($rows)) {
+    $output .= theme('table', $header, $rows, $attributes  = array(), $caption = NULL);
+  }
+  else {
+    $output .= t('No subscribed blocks defined. <a href="@add">Add one!</a>', array('@add' => url('admin/settings/sharedblocks/subscribe/add')));
+  }
+  return $output;
+}
+
+
+/**
+ * Form for adding new subscription block.
+ */
+function sharedblocks_subscribe_form(&$form_state, $id = NULL) {
+  // Populate the default values.
+  $edit = array();
+  if (!is_null($id) && is_numeric($id)) {
+    $edit = db_fetch_array(db_query('SELECT * FROM {sharedblocks} WHERE id = %d', $id));
+  }
+
+  $edit += array(
+    'id' => NULL,
+    'name' => '',
+    'label' => '',
+    'url' => '',
+    'update_interval' => 3600,
+  );
+
+  $form = array();
+  $form['name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Name'),
+    '#default_value' => $edit['name'],
+    '#description' => t('Machine readable name of this block. Alphanumeric and underscore characters only.'),
+    '#required' => TRUE,
+  );
+  $form['url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Subscribe URL'),
+    '#default_value' => $edit['url'],
+    '#description' => t('The URL to the block you wish to subscribe to, supplied by publishing site.'),
+    '#required' => TRUE,
+  );
+  $period = drupal_map_assoc(array(60, 300, 600, 1200, 1800, 3600, 10800, 21600, 32400, 43200, 86400, 172800, 259200, 604800, 1209600, 2419200, 4838400, 9676800), 'format_interval');
+  $form['update_interval'] = array(
+    '#type' => 'select',
+    '#title' => t('Refresh rate'),
+    '#options' => $period,
+    '#description' => t("How frequently should this block's content be updated? Note that this can only run as often as cron runs."),
+    '#default_value' => $edit['update_interval'],
+  );
+  
+  if (!is_null($id)) {
+    $form['id'] = array(
+      '#type' => 'value',
+      '#value' => $id,
+    );
+  }
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+
+  return $form;
+}
+
+/**
+ * Validate callback for subscription block add/edit form.
+ */
+function sharedblocks_subscribe_form_validate($form, &$form_state) {
+  $values = $form_state['values'];
+  // Check for machine-readable name.
+  if (preg_match('/[^0-9A-Za-z_]/', $values['name'])) {
+    form_set_error('name', t('Your machine-readable name must be alphanumeric and underscore characters only.'));
+  }
+}
+
+/**
+ * Submit callback for subscription block add/edit form.
+ */
+function sharedblocks_subscribe_form_submit($form, &$form_state) {
+  $values = $form_state['values'];
+  // Fetch the block from the publishing site.
+  $block_data = sharedblocks_fetch_block($values['url']);
+  if (!$block_data) {
+    drupal_set_message(t('Block information not received, please check your URL.'), 'error');
+  }
+
+  // Specify to drupal_write_record() whether we're doing an insert or update.
+  if (is_null($values['id'])) {
+    $update = array();
+  }
+  else {
+    $update = array('id');
+    $record['id'] = $values['id'];
+  }
+
+  // Prep our values for the database.
+  $record['name'] = $values['name'];
+  $record['url'] = $values['url'];
+  $record['update_interval'] = (int) $values['update_interval'];
+  $record['block_data'] = serialize($block_data);
+  $record['description'] = $block_data->subject;
+  $record['last_update'] = time();
+  $record['expiration'] = time() + $values['update_interval'];
+
+  // Populate the table with values.
+  drupal_write_record('sharedblocks', $record, $update);
+
+  // Redirect back to the listing page.
+  $form_state['redirect'] = 'admin/settings/sharedblocks/subscribe';
+  drupal_set_message(t('Your subscription block has been saved.'));
+  
+}
+
+/**
+ * Fetch block contents from a published site.
+ *
+ * @param $url
+ *   The URL to the published block, for example:
+ *   http://pubtest.lulladev.com/sharedblocks/comment/0
+ * @return
+ *   Returns block data from the published site, or FALSE if block was invalid.
+ */
+function sharedblocks_fetch_block($url) {
+  $result = file_get_contents($url);
+  $block_data = FALSE;
+  if ($result) {
+    // Block exists: pull its information into an object.
+    // Tell it to return an array, rather than an object.
+    $block_data = json_decode($result, TRUE);
+  }
+
+  return $block_data;
+}
+
+
+/**
+ * Page callback for block publish callback.
+ */
+function sharedblocks_publish_block($module, $delta) {
+  $blocks = variable_get('sharedblocks_publish', array());
+  if ($blocks[$module][$delta]) {
+    // Load the block.
+    $block = module_invoke($module, 'block', 'view', $delta);
+    if (is_array($block)) {
+      // Translate relative URLs into absolute ones.
+      // NOTE: Only works with double quotes..
+      // @todo: see about capturing ('|") and then matching %2 at end
+      $regex = '~(href|src|HREF|SRC)="(\/.+?)"~';
+      $block['content'] = preg_replace($regex, '\\1="' . $GLOBALS['base_url'] . '\\2"', $block['content']);
+      
+      // We are returning JavaScript, so tell the browser.
+      drupal_set_header('Content-Type: text/javascript; charset=utf-8');
+      // Render it in JSON format.
+      echo json_encode($block);
+      return;
+    }
+  }
+  
+  // If you get here, something has gone wrong.
+  return drupal_not_found();
+}
+
+/**
+ * Display a single shared block.
+ */
+function sharedblocks_block_view($delta) {
+  // Look up details for this block.
+  $block = unserialize(db_result(db_query("SELECT block_data FROM {sharedblocks} WHERE name = '%s'", $delta)));
+
+  // Return the unserialized block data.
+  return $block;
+}
+

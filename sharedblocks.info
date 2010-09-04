@@ -1,0 +1,4 @@
+; $Id$
+name = Shared Blocks
+description = "Syndicate blocks across multiple sites"
+core = 6.x

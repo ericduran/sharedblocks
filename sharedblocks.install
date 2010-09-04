@@ -1,0 +1,58 @@
+<?php
+
+// sharedblocks:
+// name (PK)
+// URL of publish site
+// data (serialized array built from json object)
+// last updated (timestamp)
+// expiration (timestamp)
+
+
+/**
+ * Implementation of hook_schema().
+ */
+function sharedblocks_schema() {
+  $schema['sharedblocks'] = array(
+    'fields' => array(
+      'name' => array('type' => 'varchar', 'length' => '32', 'not null' => TRUE),
+      'description' => array('type' => 'varchar', 'length' => '255', 'not null' => TRUE),
+      'url' => array('type' => 'varchar', 'length' => '255', 'not null' => TRUE),
+      'update_interval' => array('type' => 'int', 'not null' => TRUE, 'disp-width' => '11'),
+      'block_data' => array('type' => 'blob', 'not null' => TRUE),
+      'last_update' => array('type' => 'int', 'not null' => TRUE, 'disp-width' => '11'),
+      'expiration' => array('type' => 'int', 'not null' => TRUE, 'disp-width' => '11'),
+      'id' => array('type' => 'serial', 'not null' => TRUE, 'disp-width' => '11')),
+    'primary key' => array('id'),
+    'unique keys' => array(
+      'name_unique' => array('name'),
+    ),
+    'indexes' => array(
+      'expiration' => array('expiration'),
+      'name' => array('name')),
+  );
+
+  return $schema;
+}
+
+/**
+ * Implementation of hook_install().
+ */
+function sharedblocks_install() {
+  // Create tables.
+  drupal_install_schema('sharedblocks');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function sharedblocks_uninstall() {
+  // @todo: Clear out variables.
+
+  // Remove tables.
+  drupal_uninstall_schema('sharedblocks');
+}
+
+
+
+
+
