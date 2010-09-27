@@ -313,7 +313,7 @@ function sharedblocks_subscribe_form_submit($form, &$form_state) {
  * Form for deletion of a subscription block.
  */
 function sharedblocks_subscribe_delete_form(&$form_state, $id = NULL) {
-  
+
   if (!is_null($id) && is_numeric($id)) {
     $edit = db_fetch_array(db_query('SELECT * FROM {sharedblocks} WHERE id = %d', $id));
   }
