@@ -7,7 +7,6 @@
  * @todo
  *  - Check for blocks that are cached per page or per user and flag them as possibly incompatible
  *  - Add help text on publish and subscribe pages
- *  - Add delete option for block subscriptions
  *  - Turn subscription add button into a local task
  *  - Move sharedblocks configuration under "build" rather than "settings"
  */
@@ -48,6 +47,13 @@ function sharedblocks_menu() {
     'title' => 'Subscribe Blocks',
     'page callback' => 'drupal_get_form',
     'page arguments' => array('sharedblocks_subscribe_form', 5),
+    'access arguments' => array('subscribe to blocks'),
+    'type' => MENU_CALLBACK,
+  );
+  $items['admin/settings/sharedblocks/subscribe/delete/%'] = array(
+    'title' => 'Subscribe Blocks',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('sharedblocks_subscribe_delete_form', 5),
     'access arguments' => array('subscribe to blocks'),
     'type' => MENU_CALLBACK,
   );
@@ -178,13 +184,16 @@ function sharedblocks_subscribe_page() {
   // Grab list of all shared blocks we've subscribed to.
   $result = db_query('SELECT * FROM {sharedblocks} ORDER BY name');
   while ($r = db_fetch_object($result)) {
-    $rows[] = array(check_plain($r->name), check_plain($r->description), l(t('edit'), "admin/settings/sharedblocks/subscribe/edit/". $r->id));
+    $edit = l(t('edit'), "admin/settings/sharedblocks/subscribe/edit/". $r->id);
+    $delete = l(t('delete'), "admin/settings/sharedblocks/subscribe/delete/". $r->id);
+    $rows[] = array(check_plain($r->name), check_plain($r->description), $edit, $delete);
     $rows[] = $row;
   }
 
   // Output list in a table.
   $output .= '<p>' . l(t('Add new subscribed block'), 'admin/settings/sharedblocks/subscribe/add') . '</p>';
   if (count($rows)) {
+    $header = array('Name', 'Description', array('data' => 'Operations', 'colspan' => 2));
     $output .= theme('table', $header, $rows, $attributes  = array(), $caption = NULL);
   }
   else {
@@ -299,6 +308,38 @@ function sharedblocks_subscribe_form_submit($form, &$form_state) {
   drupal_set_message(t('Your subscription block has been saved.'));
   
 }
+
+/**
+ * Form for deletion of a subscription block.
+ */
+function sharedblocks_subscribe_delete_form(&$form_state, $id = NULL) {
+  
+  if (!is_null($id) && is_numeric($id)) {
+    $edit = db_fetch_array(db_query('SELECT * FROM {sharedblocks} WHERE id = %d', $id));
+  }
+
+  $form['id'] = array('#type' => 'hidden', '#value' => $id);
+  $form['name'] = array('#type' => 'hidden', '#value' => $edit['name']);
+
+  return confirm_form($form, t('Are you sure you want to delete the %name shared block?', array('%name' => $edit['name'])), 'admin/settings/sharedblocks/subscribe', t('This action cannot be undone.'), t('Delete'), t('Cancel'));
+
+}
+
+/**
+ * Submit callback for subscription block delete form.
+ */
+function sharedblocks_subscribe_delete_form_submit($form, &$form_state) {
+  $values = $form_state['values'];
+
+  // Delte the subscription block.
+  db_query('DELETE FROM {sharedblocks} WHERE id = %d', $values['id']);
+
+  // Redirect back to the listing page.
+  $form_state['redirect'] = 'admin/settings/sharedblocks/subscribe';
+  drupal_set_message(t('The %name subscription block has been delete.', array('%name' => $values['name'])));
+
+}
+
 
 /**
  * Fetch block contents from a published site.
